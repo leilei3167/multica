@@ -265,59 +265,16 @@ var (
 	// process PATH. Mirrors the detectAgentVersion hook above.
 	lookPath = exec.LookPath
 
-	// profilePathExecutable reports whether path points at a file this host
-	// can actually launch. Unix uses the executable bits; Windows has none
-	// (Go reports 0666/0444 for regular files and only adds 0111 on
-	// directories), so a PATHEXT match is the equivalent gate. This is what
-	// appendProfileRuntimes uses before trusting a per-machine command path
-	// override (MUL-3284) — a stale or mistyped override must fall back to
-	// PATH rather than register a runtime that can't launch.
-	// Indirected as a package var so tests can assert override preference
-	// without staging a real executable on disk.
-	profilePathExecutable = fileLooksLaunchable
+	// resolveProfileOverridePath is what appendProfileRuntimes uses before
+	// trusting a per-machine command path override (MUL-3284). It must be the
+	// same contract agent launches use — resolveAgentExecutablePath /
+	// exec.LookPath — so Windows PATHEXT completion (.cmd shims, extension-less
+	// pins) and unix exec-bit checks stay in one place. A stale or mistyped
+	// override must fall back to PATH rather than register a runtime that
+	// can't launch. Indirected as a package var so override-preference tests
+	// can decide which paths resolve without staging real files on disk.
+	resolveProfileOverridePath = resolveAgentExecutablePath
 )
-
-// defaultWindowsPathext is used when PATHEXT is unset. It matches the
-// CreateProcess default closely enough to accept .exe/.cmd shims and reject
-// ordinary data files.
-const defaultWindowsPathext = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
-
-// fileLooksLaunchable is the real profilePathExecutable implementation.
-func fileLooksLaunchable(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return extListedInPathext(path, os.Getenv("PATHEXT"))
-	}
-	return info.Mode().Perm()&0o111 != 0
-}
-
-// extListedInPathext reports whether path's extension is in a PATHEXT list.
-// Comparison is case-insensitive; a missing/empty list uses defaultWindowsPathext.
-func extListedInPathext(path, pathext string) bool {
-	if pathext == "" {
-		pathext = defaultWindowsPathext
-	}
-	ext := filepath.Ext(path)
-	if ext == "" {
-		return false
-	}
-	for _, candidate := range strings.Split(pathext, ";") {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if candidate[0] != '.' {
-			candidate = "." + candidate
-		}
-		if strings.EqualFold(ext, candidate) {
-			return true
-		}
-	}
-	return false
-}
 
 // workspaceState tracks registered runtimes for a single workspace.
 //
@@ -2842,8 +2799,8 @@ func (d *Daemon) appendProfileRuntimes(ctx context.Context, workspaceID string, 
 		var resolved string
 		var failureReason string
 		if override := strings.TrimSpace(d.cfg.ProfileCommandOverrides[profile.ID]); override != "" {
-			if profilePathExecutable(override) {
-				resolved = override
+			if path, err := resolveProfileOverridePath(override); err == nil {
+				resolved = path
 				d.logger.Info("custom runtime profile: using per-machine command path override",
 					"workspace_id", workspaceID, "profile_id", profile.ID, "command_path", resolved)
 			} else {
