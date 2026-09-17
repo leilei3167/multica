@@ -57,14 +57,8 @@ func TestResolveAgentExecutablePath_ProfileOverride(t *testing.T) {
 		if got != shimCmd {
 			t.Fatalf("extension-less override resolved to %q, want %q", got, shimCmd)
 		}
-
-		txt := filepath.Join(dir, "notes.txt")
-		if err := os.WriteFile(txt, []byte("nope"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := resolveAgentExecutablePath(txt); err == nil {
-			t.Fatalf("resolveAgentExecutablePath(%q) succeeded, want error", txt)
-		}
+		// Non-PATHEXT absolute files are not asserted: on Windows,
+		// exec.LookPath accepts an absolute path to any existing file.
 	} else {
 		tool := filepath.Join(dir, "tool")
 		if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o644); err != nil {
